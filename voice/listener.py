@@ -1,48 +1,25 @@
-import whisper
-import pyaudio
-import wave
-import os
+import queue
+import sounddevice as sd
+import json
+from vosk import Model, KaldiRecognizer
 
-model = whisper.load_model("base")
+model = Model("voice/model")
+samplerate = 16000
+q = queue.Queue()
 
-CHUNK = 1024
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 16000
-RECORD_SECONDS = 5
-TEMP_FILE = "temp.wav"
+def callback(indata, frames, time, status):
+    q.put(bytes(indata))
 
 def listen():
-    audio = pyaudio.PyAudio()
+    rec = KaldiRecognizer(model, samplerate)
 
-    stream = audio.open(format=FORMAT,
-                        channels=CHANNELS,
-                        rate=RATE,
-                        input=True,
-                        frames_per_buffer=CHUNK)
+    print("🎙 Listening...")
 
-    print("🎙 Listening... Speak now")
-
-    frames = []
-
-    for _ in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
-        data = stream.read(CHUNK, exception_on_overflow=False)
-        frames.append(data)
-
-    stream.stop_stream()
-    stream.close()
-    audio.terminate()
-
-    wf = wave.open(TEMP_FILE, "wb")
-    wf.setnchannels(CHANNELS)
-    wf.setsampwidth(audio.get_sample_size(FORMAT))
-    wf.setframerate(RATE)
-    wf.writeframes(b"".join(frames))
-    wf.close()
-
-    print("🧠 Transcribing...")
-
-    result = model.transcribe(TEMP_FILE)
-    os.remove(TEMP_FILE)
-
-    return result["text"].strip()
+    with sd.RawInputStream(samplerate=samplerate, blocksize=8000,dtype='int16', channels=1, callback=callback):
+        while True:
+            data = q.get()
+            if rec.AcceptWaveform(data):
+                result = json.loads(rec.Result())
+                text = result.get("text", "")
+                if text:
+                    return text
